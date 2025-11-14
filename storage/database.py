@@ -64,6 +64,7 @@ class StorageManager:
                 timestamp DATETIME NOT NULL,
                 track_id INTEGER NOT NULL,
                 object_type VARCHAR(20) NOT NULL,
+                vehicle_subtype VARCHAR(30),
                 speed_kmh REAL NOT NULL,
                 direction VARCHAR(10),
                 confidence REAL,
@@ -73,6 +74,15 @@ class StorageManager:
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Add vehicle_subtype column if it doesn't exist (for existing databases)
+        try:
+            cursor.execute("ALTER TABLE detections ADD COLUMN vehicle_subtype VARCHAR(30)")
+            self.conn.commit()
+            logger.info("Added vehicle_subtype column to detections table")
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
 
         # Create indexes
         cursor.execute("""
@@ -138,14 +148,15 @@ class StorageManager:
 
         cursor.execute("""
             INSERT INTO detections (
-                timestamp, track_id, object_type, speed_kmh,
+                timestamp, track_id, object_type, vehicle_subtype, speed_kmh,
                 direction, confidence, distance_meters,
                 time_seconds, trajectory_length
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             speed_estimate.timestamp,
             speed_estimate.track_id,
             speed_estimate.object_type,
+            getattr(speed_estimate, 'vehicle_subtype', None),
             speed_estimate.speed_kmh,
             speed_estimate.direction,
             speed_estimate.confidence,
@@ -181,6 +192,7 @@ class StorageManager:
                     'timestamp',
                     'track_id',
                     'object_type',
+                    'vehicle_subtype',
                     'speed_kmh',
                     'direction',
                     'confidence',
@@ -195,6 +207,7 @@ class StorageManager:
                 speed_estimate.timestamp.isoformat(),
                 speed_estimate.track_id,
                 speed_estimate.object_type,
+                getattr(speed_estimate, 'vehicle_subtype', ''),
                 f"{speed_estimate.speed_kmh:.2f}",
                 speed_estimate.direction,
                 f"{speed_estimate.confidence:.2f}",

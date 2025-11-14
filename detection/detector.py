@@ -24,6 +24,8 @@ class Detection:
     class_name: str
     confidence: float
     timestamp: datetime
+    subtype: Optional[str] = None  # Detailed vehicle subtype (e.g., 'taxi', 'kei_car')
+    subtype_confidence: Optional[float] = None
 
     def center(self) -> Tuple[int, int]:
         """Get center point of bounding box"""
@@ -62,7 +64,8 @@ class YOLODetector:
         confidence: float = 0.5,
         device: str = "cpu",
         classes: Optional[List[int]] = None,
-        imgsz: int = 640
+        imgsz: int = 640,
+        enable_classification: bool = True
     ):
         """
         Initialize YOLO detector
@@ -73,11 +76,13 @@ class YOLODetector:
             device: Device to run on ("cpu" or "cuda")
             classes: List of class IDs to detect (None = all vehicle classes)
             imgsz: Input image size
+            enable_classification: Enable detailed vehicle classification
         """
         self.model_path = model_path
         self.confidence = confidence
         self.device = device
         self.imgsz = imgsz
+        self.enable_classification = enable_classification
 
         # Set classes to detect
         if classes is None:
@@ -88,11 +93,18 @@ class YOLODetector:
         self.model = None
         self.is_loaded = False
 
+        # Initialize vehicle classifier
+        self.classifier = None
+        if enable_classification:
+            from .classifier import VehicleClassifier
+            self.classifier = VehicleClassifier()
+
         logger.info(f"YOLODetector initialized:")
         logger.info(f"  Model: {model_path}")
         logger.info(f"  Confidence: {confidence}")
         logger.info(f"  Device: {device}")
         logger.info(f"  Classes: {self.classes}")
+        logger.info(f"  Classification: {'enabled' if enable_classification else 'disabled'}")
 
     def load_model(self) -> bool:
         """
@@ -168,13 +180,26 @@ class YOLODetector:
                     # Get class name
                     class_name = self.VEHICLE_CLASSES.get(class_id, f"class_{class_id}")
 
+                    # Perform detailed classification if enabled
+                    subtype = None
+                    subtype_confidence = None
+                    if self.classifier:
+                        try:
+                            vehicle_subtype = self.classifier.classify(frame, bbox, class_name)
+                            subtype = vehicle_subtype.subtype
+                            subtype_confidence = vehicle_subtype.confidence
+                        except Exception as e:
+                            logger.debug(f"Classification failed for {class_name}: {e}")
+
                     # Create detection object
                     detection = Detection(
                         bbox=bbox,
                         class_id=class_id,
                         class_name=class_name,
                         confidence=confidence,
-                        timestamp=timestamp
+                        timestamp=timestamp,
+                        subtype=subtype,
+                        subtype_confidence=subtype_confidence
                     )
 
                     detections.append(detection)
@@ -232,7 +257,12 @@ class YOLODetector:
 
             # Draw label
             if show_labels:
-                label = det.class_name
+                # Use subtype if available, otherwise use base class name
+                if det.subtype and self.classifier:
+                    label = self.classifier.get_display_name(det.subtype, language='ja')
+                else:
+                    label = det.class_name
+
                 if show_confidence:
                     label += f" {det.confidence:.2f}"
 

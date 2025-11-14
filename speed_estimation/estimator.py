@@ -63,6 +63,7 @@ class SpeedEstimate:
     trajectory_length: int
     distance_meters: float
     time_seconds: float
+    vehicle_subtype: Optional[str] = None  # Detailed vehicle subtype
 
     def is_speeding(self, speed_limit_kmh: float) -> bool:
         """Check if speed exceeds limit"""
@@ -167,7 +168,8 @@ class SpeedEstimator:
             timestamp=track.timestamps[-1] if track.timestamps else datetime.now(),
             trajectory_length=len(track.trajectory),
             distance_meters=distance_meters,
-            time_seconds=time_seconds
+            time_seconds=time_seconds,
+            vehicle_subtype=getattr(track, 'vehicle_subtype', None)
         )
 
     def _calculate_trajectory_distance(self, trajectory: list) -> float:

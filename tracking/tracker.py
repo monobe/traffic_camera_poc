@@ -28,12 +28,15 @@ class Track:
     state: str = 'active'  # 'active', 'lost', 'finished'
     frames_since_update: int = 0
     total_frames: int = 0
+    vehicle_subtype: Optional[str] = None  # Detailed vehicle subtype
+    subtype_history: List[Optional[str]] = field(default_factory=list)
 
     def update(
         self,
         bbox: Tuple[int, int, int, int],
         confidence: float,
-        timestamp: datetime
+        timestamp: datetime,
+        subtype: Optional[str] = None
     ):
         """
         Update track with new detection
@@ -42,6 +45,7 @@ class Track:
             bbox: Bounding box (x1, y1, x2, y2)
             confidence: Detection confidence
             timestamp: Detection timestamp
+            subtype: Vehicle subtype
         """
         # Calculate center point
         center_x = (bbox[0] + bbox[2]) // 2
@@ -51,6 +55,11 @@ class Track:
         self.timestamps.append(timestamp)
         self.bbox_history.append(bbox)
         self.confidence_history.append(confidence)
+        self.subtype_history.append(subtype)
+
+        # Update vehicle_subtype with most recent non-None value
+        if subtype is not None:
+            self.vehicle_subtype = subtype
 
         self.frames_since_update = 0
         self.total_frames += 1
@@ -177,7 +186,8 @@ class ObjectTracker:
             self.tracks[track_id].update(
                 bbox=detection.bbox,
                 confidence=detection.confidence,
-                timestamp=timestamp
+                timestamp=timestamp,
+                subtype=getattr(detection, 'subtype', None)
             )
 
         # Create new tracks for unmatched detections
@@ -187,12 +197,14 @@ class ObjectTracker:
 
             track = Track(
                 track_id=track_id,
-                class_name=detection.class_name
+                class_name=detection.class_name,
+                vehicle_subtype=getattr(detection, 'subtype', None)
             )
             track.update(
                 bbox=detection.bbox,
                 confidence=detection.confidence,
-                timestamp=timestamp
+                timestamp=timestamp,
+                subtype=getattr(detection, 'subtype', None)
             )
 
             self.tracks[track_id] = track
