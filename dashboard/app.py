@@ -11,16 +11,20 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
+import cv2
+import yaml
 
 # Import application modules
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
 
 from storage.database import StorageManager
+from capture.stream import CameraStream
+from detection.detector import YOLODetector
 
 
 logger = logging.getLogger(__name__)
@@ -37,8 +41,11 @@ templates_dir = Path(__file__).parent / "templates"
 templates_dir.mkdir(exist_ok=True)
 templates = Jinja2Templates(directory=str(templates_dir))
 
-# Initialize storage
+# Initialize storage and camera
 storage = None
+camera_stream = None
+detector = None
+camera_config = None
 
 
 def init_storage(db_path: str = "./data/traffic.db", csv_dir: str = "./data/csv"):
@@ -48,10 +55,52 @@ def init_storage(db_path: str = "./data/traffic.db", csv_dir: str = "./data/csv"
     logger.info("Storage manager initialized")
 
 
+def init_camera():
+    """Initialize camera stream"""
+    global camera_stream, detector, camera_config
+
+    try:
+        # Load config
+        config_path = Path("config.yaml")
+        if not config_path.exists():
+            logger.warning("config.yaml not found, camera streaming disabled")
+            return
+
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+
+        camera_config = config.get('camera', {})
+        rtsp_url = camera_config.get('rtsp_url')
+
+        if not rtsp_url:
+            logger.warning("RTSP URL not configured, camera streaming disabled")
+            return
+
+        # Initialize camera
+        camera_stream = CameraStream(
+            rtsp_url=rtsp_url,
+            fps=camera_config.get('fps', 10),
+            resolution=tuple(camera_config.get('resolution')) if camera_config.get('resolution') else None
+        )
+
+        # Initialize detector for visualization
+        detection_config = config.get('detection', {})
+        detector = YOLODetector(
+            model_path=detection_config.get('model', 'yolov8n.pt'),
+            confidence=detection_config.get('confidence', 0.5),
+            device=detection_config.get('device', 'cpu')
+        )
+
+        logger.info("Camera streaming initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize camera: {e}")
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize on startup"""
     init_storage()
+    init_camera()
     logger.info("Dashboard started")
 
 
@@ -60,6 +109,8 @@ async def shutdown_event():
     """Cleanup on shutdown"""
     if storage:
         storage.close()
+    if camera_stream:
+        camera_stream.release()
     logger.info("Dashboard stopped")
 
 
@@ -273,12 +324,66 @@ async def get_vehicle_types(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def generate_video_stream():
+    """Generate video stream with detections"""
+    global camera_stream, detector
+
+    if camera_stream is None:
+        # Return placeholder image
+        import numpy as np
+        placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+        cv2.putText(placeholder, "Camera not configured", (50, 240),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        _, buffer = cv2.imencode('.jpg', placeholder)
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+        return
+
+    # Connect to camera if not connected
+    if not camera_stream.is_connected:
+        if not camera_stream.connect():
+            logger.error("Failed to connect to camera for streaming")
+            return
+
+    # Load detector if needed
+    if detector and not detector.is_loaded:
+        detector.load_model()
+
+    try:
+        for frame in camera_stream.frame_generator(auto_reconnect=True):
+            # Run detection and visualize
+            if detector and detector.is_loaded:
+                annotated_frame, detections = detector.detect_and_visualize(frame)
+            else:
+                annotated_frame = frame
+
+            # Encode frame as JPEG
+            _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+
+            # Yield frame in multipart format
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+
+    except Exception as e:
+        logger.error(f"Error in video stream: {e}")
+
+
+@app.get("/api/video_feed")
+async def video_feed():
+    """Video feed endpoint"""
+    return StreamingResponse(
+        generate_video_stream(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
     return {
         "status": "ok",
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
+        "camera_enabled": camera_stream is not None
     }
 
 
