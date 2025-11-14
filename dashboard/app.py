@@ -334,6 +334,7 @@ def generate_video_stream(quality: int = 90, detection_interval: int = 3, enable
         enable_detection: Enable object detection overlay
     """
     global camera_stream, detector
+    import time
 
     if camera_stream is None:
         # Return placeholder image
@@ -358,24 +359,55 @@ def generate_video_stream(quality: int = 90, detection_interval: int = 3, enable
 
     frame_count = 0
     last_detections = []
+    last_frame_time = time.time()
+
+    # Target frame rate for streaming (independent of detection)
+    target_stream_fps = 10  # Stream at 10 FPS for smooth display
+    frame_interval = 1.0 / target_stream_fps
 
     try:
-        for frame in camera_stream.frame_generator(auto_reconnect=True):
-            frame_count += 1
+        while True:
+            # Get the LATEST frame from camera (skip buffered frames)
+            if camera_stream.cap and camera_stream.cap.isOpened():
+                # Grab and discard old frames to get the latest
+                for _ in range(5):  # Skip up to 5 frames to clear buffer
+                    camera_stream.cap.grab()
 
-            # Run detection only every N frames to reduce CPU load
-            if enable_detection and detector and detector.is_loaded and (frame_count % detection_interval == 0):
-                annotated_frame, last_detections = detector.detect_and_visualize(frame)
+                # Retrieve the latest frame
+                ret, frame = camera_stream.cap.retrieve()
+
+                if not ret or frame is None:
+                    logger.warning("Failed to get frame from camera")
+                    time.sleep(0.1)
+                    continue
+
+                frame_count += 1
+
+                # Run detection only every N frames to reduce CPU load
+                if enable_detection and detector and detector.is_loaded and (frame_count % detection_interval == 0):
+                    annotated_frame, last_detections = detector.detect_and_visualize(frame)
+                else:
+                    # Use raw frame
+                    annotated_frame = frame
+
+                # Encode frame as JPEG with high quality
+                _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+
+                # Yield frame in multipart format
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+
+                # Rate limit to target FPS
+                current_time = time.time()
+                elapsed = current_time - last_frame_time
+                sleep_time = frame_interval - elapsed
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                last_frame_time = time.time()
+
             else:
-                # Use raw frame or overlay previous detections
-                annotated_frame = frame
-
-            # Encode frame as JPEG with high quality
-            _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
-
-            # Yield frame in multipart format
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                logger.error("Camera not connected")
+                break
 
     except Exception as e:
         logger.error(f"Error in video stream: {e}")
