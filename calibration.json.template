@@ -1,0 +1,9 @@
+{
+  "point1": [100, 200],
+  "point2": [500, 200],
+  "real_distance_meters": 10.0,
+  "pixels_per_meter": 40.0,
+  "calibration_date": "2024-01-15T10:30:00",
+  "camera_height_meters": 3.5,
+  "notes": "Calibrated using Google Maps measurement. Distance measured along road surface."
+}

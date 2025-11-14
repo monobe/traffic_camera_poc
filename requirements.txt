@@ -1,0 +1,42 @@
+# Core dependencies
+numpy>=1.24.0
+opencv-python>=4.8.0
+pandas>=2.0.0
+pyyaml>=6.0
+
+# Computer Vision & AI
+ultralytics>=8.0.0  # YOLOv8
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Tracking
+filterpy>=1.4.5  # For SORT/Kalman filtering
+scipy>=1.10.0
+
+# Database & Storage
+sqlalchemy>=2.0.0
+
+# Reporting
+reportlab>=4.0.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+pillow>=10.0.0
+
+# Web Dashboard (optional)
+fastapi>=0.104.0
+uvicorn>=0.24.0
+jinja2>=3.1.2
+
+# Utilities
+python-dateutil>=2.8.2
+tqdm>=4.66.0
+python-dotenv>=1.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Development
+black>=23.0.0
+flake8>=6.1.0
+mypy>=1.5.0

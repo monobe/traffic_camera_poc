@@ -1,0 +1,66 @@
+# Traffic Camera PoC Configuration
+
+# Camera settings
+camera:
+  rtsp_url: "rtsp://admin:password@192.168.1.100:554/stream1"
+  fps: 15
+  resolution: [1920, 1080]
+  reconnect_timeout: 30  # seconds
+  buffer_size: 1  # frames
+
+# Detection settings
+detection:
+  model: "yolov8n.pt"  # yolov8n (fast), yolov8s (balanced), yolov8m (accurate)
+  confidence: 0.5
+  classes: [2, 3, 5, 7]  # COCO classes: 2=car, 3=motorcycle, 5=bus, 7=truck
+  device: "cpu"  # "cpu" or "cuda"
+  imgsz: 640  # input image size
+
+# Tracking settings
+tracking:
+  algorithm: "bytetrack"  # "bytetrack" or "sort"
+  max_age: 30  # maximum frames to keep lost tracks
+  min_hits: 3  # minimum detections to start a track
+  iou_threshold: 0.3  # intersection over union threshold
+
+# Speed estimation
+speed_estimation:
+  calibration_file: "calibration.json"
+  min_track_length: 10  # minimum frames to estimate speed
+  speed_limit_kmh: 30  # local speed limit
+  direction_threshold: 50  # pixels, minimum movement to determine direction
+
+# Storage
+storage:
+  database: "./data/traffic.db"
+  csv_dir: "./data/csv"
+  retention_days: 90  # keep data for 90 days
+
+# Reporting
+reporting:
+  output_dir: "./reports"
+  location: "横浜市神奈川区・三ツ沢第25号線"
+  recipient: "神奈川警察署 交通課"
+  auto_generate: false  # auto-generate weekly reports
+  report_day: 1  # Monday (0=Monday, 6=Sunday)
+
+# Dashboard (optional)
+dashboard:
+  enabled: false
+  host: "0.0.0.0"
+  port: 8000
+  debug: false
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file: "./logs/traffic_monitor.log"
+  max_size_mb: 100
+  backup_count: 5
+  console: true  # also log to console
+
+# Performance
+performance:
+  frame_skip: 1  # process every N frames (1 = no skip)
+  batch_mode: false  # process video files instead of real-time
+  async_storage: true  # async database writes
