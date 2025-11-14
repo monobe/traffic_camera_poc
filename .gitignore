@@ -60,6 +60,7 @@ calibration.json
 Thumbs.db
 
 # Config (ignore local overrides)
+config.yaml
 config.local.yaml
 .env
 

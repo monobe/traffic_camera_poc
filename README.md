@@ -70,6 +70,22 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### 5. Configure Settings
+
+```bash
+# Copy example config and edit with your settings
+cp config.yaml.example config.yaml
+nano config.yaml  # or use your preferred editor
+```
+
+**Important**: Update the RTSP URL with your camera credentials:
+```yaml
+camera:
+  rtsp_url: "rtsp://YOUR_USERNAME:YOUR_PASSWORD@YOUR_CAMERA_IP:554/stream1"
+```
+
+See [docs/CAMERA_SETUP.md](docs/CAMERA_SETUP.md) for detailed camera setup instructions.
+
 ## Project Structure
 
 ```
@@ -82,7 +98,7 @@ traffic-monitoring/
 ├── stats/              # Daily statistics
 ├── report/             # PDF report generation
 ├── dashboard/          # Web UI (optional)
-├── config.yaml         # Configuration file
+├── config.yaml.example # Configuration template
 ├── requirements.txt    # Python dependencies
 └── README.md
 ```
@@ -110,7 +126,14 @@ Follow on-screen instructions to mark two points of known distance on the road.
 
 ### 3. Configuration
 
-Edit `config.yaml`:
+Copy and edit configuration file:
+
+```bash
+cp config.yaml.example config.yaml
+nano config.yaml
+```
+
+Update the RTSP URL:
 
 ```yaml
 camera:

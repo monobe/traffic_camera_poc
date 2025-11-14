@@ -2,7 +2,10 @@
 
 # Camera settings
 camera:
-  rtsp_url: "rtsp://admin:password@192.168.1.100:554/stream1"
+  # RTSP URL format: rtsp://username:password@camera_ip:port/stream
+  # For TP-Link Tapo C320WS: rtsp://username:password@camera_ip:554/stream1
+  # Example: rtsp://admin:mypassword@192.168.1.100:554/stream1
+  rtsp_url: "rtsp://YOUR_USERNAME:YOUR_PASSWORD@YOUR_CAMERA_IP:554/stream1"
   fps: 15
   resolution: [1920, 1080]
   reconnect_timeout: 30  # seconds
