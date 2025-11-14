@@ -387,6 +387,103 @@ async def health_check():
     }
 
 
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    """Settings page"""
+    return templates.TemplateResponse("settings.html", {"request": request})
+
+
+@app.get("/api/calibration/capture")
+async def capture_calibration_frame():
+    """Capture a frame for calibration"""
+    global camera_stream
+
+    if camera_stream is None or not camera_stream.is_connected:
+        raise HTTPException(status_code=503, detail="Camera not available")
+
+    try:
+        frame = camera_stream.get_frame()
+        if frame is None:
+            raise HTTPException(status_code=500, detail="Failed to capture frame")
+
+        # Encode frame as JPEG
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+        from fastapi.responses import Response
+        return Response(content=buffer.tobytes(), media_type="image/jpeg")
+
+    except Exception as e:
+        logger.error(f"Error capturing calibration frame: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/calibration/save")
+async def save_calibration(request: Request):
+    """Save calibration data"""
+    import json
+    from datetime import datetime
+
+    try:
+        data = await request.json()
+
+        # Validate required fields
+        required_fields = ['point1', 'point2', 'real_distance_meters', 'pixel_distance', 'pixels_per_meter']
+        for field in required_fields:
+            if field not in data:
+                raise HTTPException(status_code=400, detail=f"Missing field: {field}")
+
+        # Prepare calibration data
+        calibration_data = {
+            "point1": data['point1'],
+            "point2": data['point2'],
+            "real_distance_meters": data['real_distance_meters'],
+            "pixel_distance": data['pixel_distance'],
+            "pixels_per_meter": data['pixels_per_meter'],
+            "calibration_date": datetime.now().isoformat(),
+            "notes": "Calibrated via dashboard"
+        }
+
+        # Save to file
+        calibration_file = Path("calibration.json")
+        with open(calibration_file, 'w') as f:
+            json.dump(calibration_data, f, indent=2)
+
+        logger.info(f"Calibration saved: {calibration_data['pixels_per_meter']:.2f} pixels/meter")
+
+        return {
+            "status": "success",
+            "message": "Calibration saved successfully",
+            "pixels_per_meter": calibration_data['pixels_per_meter']
+        }
+
+    except Exception as e:
+        logger.error(f"Error saving calibration: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/calibration/current")
+async def get_current_calibration():
+    """Get current calibration data"""
+    import json
+
+    try:
+        calibration_file = Path("calibration.json")
+        if not calibration_file.exists():
+            return {"calibrated": False}
+
+        with open(calibration_file, 'r') as f:
+            data = json.load(f)
+
+        return {
+            "calibrated": True,
+            **data
+        }
+
+    except Exception as e:
+        logger.error(f"Error loading calibration: {e}")
+        return {"calibrated": False, "error": str(e)}
+
+
 def main():
     """Main entry point"""
     logging.basicConfig(
