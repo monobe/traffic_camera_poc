@@ -111,49 +111,81 @@ Configure your TP-Link Tapo C320WS camera:
 
 1. Install camera and connect to power
 2. Set up camera via Tapo mobile app
-3. Enable RTSP stream in camera settings
+3. Enable RTSP stream in camera settings (Advanced Settings → Camera Account → RTSP ON)
 4. Note down RTSP URL: `rtsp://username:password@camera_ip:554/stream1`
 
-### 2. Calibration
+See [docs/CAMERA_SETUP.md](docs/CAMERA_SETUP.md) for detailed instructions.
+
+### 2. Test Camera Connection
+
+```bash
+source venv/bin/activate
+python main.py --test-camera --config config.yaml
+```
+
+### 3. Calibration
 
 Before running speed estimation, calibrate the camera view:
 
 ```bash
-python calibration/calibrate.py --camera-url "rtsp://..." --output calibration.json
+source venv/bin/activate
+python main.py --calibrate --config config.yaml
 ```
 
-Follow on-screen instructions to mark two points of known distance on the road.
+Follow on-screen instructions to:
+1. Click two points on the road with known distance
+2. Enter the real-world distance in meters
+3. Calibration file will be saved as `calibration.json`
 
-### 3. Configuration
+See [docs/CALIBRATION.md](docs/CALIBRATION.md) for details.
 
-Copy and edit configuration file:
+### 4. Start Monitoring
 
 ```bash
-cp config.yaml.example config.yaml
-nano config.yaml
+source venv/bin/activate
+python main.py --config config.yaml
 ```
 
-Update the RTSP URL:
+The system will:
+- Connect to camera
+- Detect and track vehicles
+- Estimate speeds
+- Save data to SQLite database and CSV files
+- Log speed violations
 
-```yaml
-camera:
-  rtsp_url: "rtsp://username:password@192.168.1.100:554/stream1"
-  fps: 15
-  resolution: [1920, 1080]
+### 5. View Dashboard (Optional)
 
-detection:
-  model: "yolov8n.pt"  # or yolov8s.pt for better accuracy
-  confidence: 0.5
-  classes: [2, 3, 5, 7]  # car, motorcycle, bus, bicycle
+```bash
+source venv/bin/activate
+python main.py --dashboard --config config.yaml
+```
 
-tracking:
-  algorithm: "bytetrack"  # or "sort"
+Open http://localhost:8000 in your browser.
 
-speed_estimation:
-  calibration_file: "calibration.json"
-  min_track_length: 10  # minimum frames to estimate speed
+### 6. Generate Reports
 
-output:
+```bash
+source venv/bin/activate
+python -c "
+from datetime import datetime, timedelta
+from storage.database import StorageManager
+from report.generator import ReportGenerator
+
+storage = StorageManager()
+report_gen = ReportGenerator(storage)
+
+end_date = datetime.now()
+start_date = end_date - timedelta(days=7)
+
+report_gen.generate_report(
+    start_date=start_date,
+    end_date=end_date,
+    output_path='./reports/weekly_report.pdf'
+)
+"
+```
+
+## Usage
   data_dir: "./data"
   report_dir: "./reports"
 
