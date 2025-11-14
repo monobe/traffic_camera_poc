@@ -169,8 +169,38 @@
         <!-- Live Camera Feed -->
         <div class="chart-card" style="margin-bottom: 20px;">
             <h2>🎥 ライブカメラ映像 (リアルタイム検知)</h2>
+
+            <!-- Video Quality Settings -->
+            <div style="display: flex; gap: 20px; margin-bottom: 15px; flex-wrap: wrap;">
+                <div>
+                    <label style="font-size: 12px; color: #666;">画質:</label>
+                    <select id="video-quality" onchange="updateVideoFeed()" style="padding: 5px; border-radius: 4px; border: 1px solid #ddd;">
+                        <option value="95">最高 (95%)</option>
+                        <option value="90" selected>高 (90%)</option>
+                        <option value="85">中 (85%)</option>
+                        <option value="70">低 (70%)</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size: 12px; color: #666;">検出頻度:</label>
+                    <select id="detection-interval" onchange="updateVideoFeed()" style="padding: 5px; border-radius: 4px; border: 1px solid #ddd;">
+                        <option value="1">全フレーム (遅い)</option>
+                        <option value="2">2フレームに1回</option>
+                        <option value="3" selected>3フレームに1回 (推奨)</option>
+                        <option value="5">5フレームに1回 (速い)</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size: 12px; color: #666;">検出表示:</label>
+                    <select id="enable-detection" onchange="updateVideoFeed()" style="padding: 5px; border-radius: 4px; border: 1px solid #ddd;">
+                        <option value="true" selected>有効</option>
+                        <option value="false">無効 (生映像)</option>
+                    </select>
+                </div>
+            </div>
+
             <div style="position: relative; width: 100%; max-width: 960px; margin: 0 auto;">
-                <img id="camera-feed" src="/api/video_feed" style="width: 100%; height: auto; border-radius: 4px;" alt="Camera Feed">
+                <img id="camera-feed" src="/api/video_feed?quality=90&detection_interval=3" style="width: 100%; height: auto; border-radius: 4px;" alt="Camera Feed">
                 <div id="camera-status" style="position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); color: white; padding: 5px 10px; border-radius: 4px; font-size: 12px;">
                     カメラ接続中...
                 </div>
@@ -238,6 +268,19 @@
     <script>
         // Chart instances
         let speedChart, hourlyChart, dailyChart, vehicleTypesChart;
+
+        // Update video feed with new parameters
+        function updateVideoFeed() {
+            const quality = document.getElementById('video-quality').value;
+            const interval = document.getElementById('detection-interval').value;
+            const enableDetection = document.getElementById('enable-detection').value;
+
+            const feedImg = document.getElementById('camera-feed');
+            const newSrc = `/api/video_feed?quality=${quality}&detection_interval=${interval}&enable_detection=${enableDetection}`;
+
+            // Add timestamp to force reload
+            feedImg.src = newSrc + '&t=' + new Date().getTime();
+        }
 
         // Initialize dates
         function initializeDates() {

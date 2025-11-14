@@ -324,8 +324,15 @@ async def get_vehicle_types(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def generate_video_stream():
-    """Generate video stream with detections"""
+def generate_video_stream(quality: int = 90, detection_interval: int = 3, enable_detection: bool = True):
+    """
+    Generate video stream with optional detections
+
+    Args:
+        quality: JPEG quality (0-100), higher = better quality
+        detection_interval: Run detection every N frames (1 = every frame, 3 = every 3rd frame)
+        enable_detection: Enable object detection overlay
+    """
     global camera_stream, detector
 
     if camera_stream is None:
@@ -346,19 +353,25 @@ def generate_video_stream():
             return
 
     # Load detector if needed
-    if detector and not detector.is_loaded:
+    if enable_detection and detector and not detector.is_loaded:
         detector.load_model()
+
+    frame_count = 0
+    last_detections = []
 
     try:
         for frame in camera_stream.frame_generator(auto_reconnect=True):
-            # Run detection and visualize
-            if detector and detector.is_loaded:
-                annotated_frame, detections = detector.detect_and_visualize(frame)
+            frame_count += 1
+
+            # Run detection only every N frames to reduce CPU load
+            if enable_detection and detector and detector.is_loaded and (frame_count % detection_interval == 0):
+                annotated_frame, last_detections = detector.detect_and_visualize(frame)
             else:
+                # Use raw frame or overlay previous detections
                 annotated_frame = frame
 
-            # Encode frame as JPEG
-            _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            # Encode frame as JPEG with high quality
+            _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
 
             # Yield frame in multipart format
             yield (b'--frame\r\n'
@@ -369,10 +382,31 @@ def generate_video_stream():
 
 
 @app.get("/api/video_feed")
-async def video_feed():
-    """Video feed endpoint"""
+async def video_feed(
+    quality: int = 90,
+    detection_interval: int = 3,
+    enable_detection: bool = True
+):
+    """
+    Video feed endpoint with configurable quality and performance
+
+    Args:
+        quality: JPEG quality (1-100), default 90. Higher = better quality but larger bandwidth
+        detection_interval: Run detection every N frames, default 3. Higher = better performance
+        enable_detection: Enable object detection overlay, default True
+
+    Examples:
+        /api/video_feed?quality=95&detection_interval=1  # Best quality, all frames detected
+        /api/video_feed?quality=90&detection_interval=3  # Balanced (default)
+        /api/video_feed?quality=85&detection_interval=5  # Better performance
+        /api/video_feed?enable_detection=false           # Raw camera feed, no detection
+    """
+    # Validate parameters
+    quality = max(1, min(100, quality))
+    detection_interval = max(1, min(10, detection_interval))
+
     return StreamingResponse(
-        generate_video_stream(),
+        generate_video_stream(quality, detection_interval, enable_detection),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 
