@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+import cv2
 import numpy as np
 
 
@@ -210,6 +211,83 @@ class YOLODetector:
             logger.error(f"Error during detection: {e}")
             return []
 
+    def _draw_text_pil(
+        self,
+        img: np.ndarray,
+        text: str,
+        position: Tuple[int, int],
+        font_size: int = 20,
+        text_color: Tuple[int, int, int] = (0, 0, 0),
+        bg_color: Optional[Tuple[int, int, int]] = None
+    ) -> np.ndarray:
+        """
+        Draw Japanese text using PIL (supports Unicode)
+
+        Args:
+            img: OpenCV image (BGR)
+            text: Text to draw
+            position: (x, y) position
+            font_size: Font size
+            text_color: Text color (BGR)
+            bg_color: Background color (BGR), None for transparent
+
+        Returns:
+            Image with text drawn
+        """
+        from PIL import Image, ImageDraw, ImageFont
+        import sys
+
+        # Convert BGR to RGB
+        img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(img_pil)
+
+        # Try to load Japanese font
+        font = None
+        font_paths = [
+            '/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc',  # macOS Hiragino
+            '/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc',
+            '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',  # Linux
+            '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+            '/Library/Fonts/Arial Unicode.ttf',  # macOS Arial Unicode
+            'C:\\Windows\\Fonts\\msgothic.ttc',  # Windows MS Gothic
+        ]
+
+        for font_path in font_paths:
+            try:
+                font = ImageFont.truetype(font_path, font_size)
+                break
+            except:
+                continue
+
+        # Fallback to default font if no Japanese font found
+        if font is None:
+            try:
+                font = ImageFont.truetype("DejaVuSans.ttf", font_size)
+            except:
+                font = ImageFont.load_default()
+
+        # Get text bounding box
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+
+        # Draw background rectangle if specified
+        if bg_color is not None:
+            # Convert BGR to RGB
+            bg_color_rgb = (bg_color[2], bg_color[1], bg_color[0])
+            draw.rectangle(
+                [position[0], position[1] - text_height - 5,
+                 position[0] + text_width + 5, position[1] + 5],
+                fill=bg_color_rgb
+            )
+
+        # Draw text (convert BGR to RGB)
+        text_color_rgb = (text_color[2], text_color[1], text_color[0])
+        draw.text(position, text, font=font, fill=text_color_rgb)
+
+        # Convert back to BGR
+        return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+
     def detect_and_visualize(
         self,
         frame: np.ndarray,
@@ -227,8 +305,6 @@ class YOLODetector:
         Returns:
             Tuple of (annotated frame, detections)
         """
-        import cv2
-
         detections = self.detect(frame)
         annotated_frame = frame.copy()
 
@@ -266,31 +342,14 @@ class YOLODetector:
                 if show_confidence:
                     label += f" {det.confidence:.2f}"
 
-                # Draw label background
-                (label_width, label_height), _ = cv2.getTextSize(
-                    label,
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    1
-                )
-
-                cv2.rectangle(
-                    annotated_frame,
-                    (det.bbox[0], det.bbox[1] - label_height - 10),
-                    (det.bbox[0] + label_width, det.bbox[1]),
-                    color,
-                    -1
-                )
-
-                # Draw label text
-                cv2.putText(
+                # Draw label using PIL for Japanese text support
+                annotated_frame = self._draw_text_pil(
                     annotated_frame,
                     label,
-                    (det.bbox[0], det.bbox[1] - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 0, 0),
-                    1
+                    (det.bbox[0] + 3, det.bbox[1] - 25),
+                    font_size=18,
+                    text_color=(0, 0, 0),  # Black text
+                    bg_color=color
                 )
 
         return annotated_frame, detections
