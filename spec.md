@@ -53,48 +53,82 @@
 
 ### 機能要件
 
-#### 1. オブジェクト検知
-- **使用モデル**: YOLOv8 or YOLOv11
+#### 1. オブジェクト検知 ✅ 実装済み
+- **使用モデル**: YOLOv8n（軽量版）
 - **検知対象**:
-  - 車（普通車・タクシー）
+  - 車（普通車・タクシー・軽自動車）
   - バイク
   - 自転車
   - 歩行者
+- **詳細分類**: VehicleClassifier による車種詳細分類（タクシー、軽自動車、商用車等）
+- **日本語表示対応**: PIL/Pillow による日本語フォントレンダリング
 
-#### 2. 車両トラッキング
-- **アルゴリズム**: SORT / ByteTrack
+#### 2. 車両トラッキング ✅ 実装済み
+- **アルゴリズム**: IoU-based Object Tracker（SORT/ByteTrack互換）
+- **パラメータ**:
+  - max_age: 30フレーム（ロスト判定）
+  - min_hits: 1フレーム（即座にトラッキング開始）
+  - iou_threshold: 0.3（重なり判定）
 - **目的**: 同一車両をフレーム間で追跡し速度を算出
 
-#### 3. 速度推定
+#### 3. 速度推定 ✅ 実装済み
 - **方式**: 2点間距離 × 移動フレーム数による算出
+- **キャリブレーション機能**:
+  - Webダッシュボード上で2点クリックによる簡易キャリブレーション
+  - pixels_per_meter 自動計算
+  - 現在の設定: 142.33 px/m、13.00m監視範囲
 - **前提条件**:
   - カメラ画角固定
-  - 道路に対して視点が一定
-  - Google Maps等で事前に距離キャリブレーション実施
+  - 道路に対して視点が一定（推奨：水平視点）
+  - 15-20mの監視範囲推奨（50-60km/h測定のため）
   - 単眼カメラで実装可能
+- **パラメータ**:
+  - FPS: 20
+  - min_track_length: 7フレーム（0.35秒）
+  - speed_limit: 30 km/h
 
 - **出力データ**:
-  - 時刻
-  - 種別（car / bike / bicycle / pedestrian）
+  - 時刻（JST）
+  - track_id（トラッキングID）
+  - 種別（car / motorcycle / bicycle / person）
+  - 車両サブタイプ（taxi / kei_car / commercial等）
   - 推定速度（km/h）
   - 移動方向（上り / 下り）
   - 信頼度
+  - 走行距離（meters）
+  - 走行時間（seconds）
+  - 軌跡長（フレーム数）
 
-#### 4. 交通量計測
-- 1日・時間帯別の交通量集計
+#### 4. 交通量計測 ✅ 実装済み
+- SQLiteデータベースによるリアルタイム集計
+- 1日・時間帯別の交通量集計（hourly_stats テーブル）
+- 日次統計（daily_stats テーブル）
 - 平日・休日比較
 - 通学時間帯のピーク特定
+- CSV形式での日次エクスポート
 
-#### 5. レポート自動生成（PDF）
+#### 5. レポート自動生成（PDF） 🚧 未実装
 - 警察向けテンプレート
 - 行政向け参照資料
 - 図表（速度ヒストグラム・時系列グラフ）
 - 主要指標（速度超過率、危険挙動数）
 
-#### 6. ダッシュボード（任意）
-- ローカルWeb UI
-- 速度分布・通行量ヒートマップ
-- 日別比較機能
+#### 6. ダッシュボード ✅ 実装済み
+- **技術スタック**: FastAPI + Jinja2 Templates + Chart.js
+- **URL**: http://localhost:8000
+- **機能**:
+  - リアルタイムカメラストリーム（MJPEG）
+  - YOLO検知結果のリアルタイム表示
+  - トラッキング結果の可視化
+  - 速度測定結果の表示
+  - 統計ダッシュボード:
+    - 速度分布ヒストグラム
+    - 時間帯別通行量グラフ
+    - 日別通行量推移
+    - 車種別内訳（円グラフ）
+  - キャリブレーション設定画面（/settings）
+  - 日付範囲フィルタ機能
+- **データ収集**: enable_data_collection パラメータで制御可能
 
 ## 技術仕様
 
@@ -135,17 +169,59 @@
 ### ソフトウェア構成
 
 ```
-/traffic-monitoring/
-├── capture/            # カメラストリーム取得
-├── detection/          # YOLOv8 (yolov8n or yolov8s)
-├── tracking/           # ByteTrack or SORT
-├── calibration/        # 距離キャリブレーション
-├── speed_estimation/   # 速度算出
-├── stats/              # 日別集計
-├── report/             # PDF生成（reportlab）
-├── dashboard/          # ローカルUI（FastAPI + React optional）
-└── config.yaml         # 設定ファイル
+/traffic_camera/
+├── capture/
+│   ├── __init__.py
+│   └── stream.py              # RTSPカメラストリーム取得（OpenCV）
+├── detection/
+│   ├── __init__.py
+│   ├── detector.py            # YOLOv8n 検知エンジン
+│   └── classifier.py          # 車両詳細分類（VehicleClassifier）
+├── tracking/
+│   ├── __init__.py
+│   └── tracker.py             # IoU-based Object Tracker
+├── speed_estimation/
+│   ├── __init__.py
+│   └── estimator.py           # 速度推定エンジン
+├── storage/
+│   ├── __init__.py
+│   └── database.py            # SQLite + CSV ストレージ管理
+├── report/
+│   ├── __init__.py
+│   └── generator.py           # PDF レポート生成（未実装）
+├── dashboard/
+│   ├── __init__.py
+│   ├── app.py                 # FastAPI メインアプリケーション
+│   ├── templates/
+│   │   ├── index.html         # メインダッシュボード
+│   │   └── settings.html      # キャリブレーション設定画面
+│   └── static/                # CSS/JS（将来拡張用）
+├── data/
+│   ├── traffic.db             # SQLite データベース
+│   └── csv/                   # 日次CSV出力
+├── logs/
+│   └── traffic_monitor.log    # アプリケーションログ
+├── docs/
+│   ├── SETUP.md               # セットアップガイド
+│   ├── SPEED_MEASUREMENT.md   # 速度測定ガイドライン
+│   └── CAMERA_SETUP.md        # カメラ設置ガイド
+├── config.yaml                # システム設定ファイル
+├── calibration.json           # キャリブレーションデータ
+├── test_camera.py             # カメラ接続テスト
+├── test_detection.py          # 検知テスト
+├── requirements.txt           # Python依存パッケージ
+└── README.md                  # プロジェクト README
 ```
+
+**主要な技術スタック:**
+- **検知**: ultralytics YOLOv8n
+- **トラッキング**: カスタム IoU-based tracker
+- **Web**: FastAPI + Jinja2 + Chart.js
+- **画像処理**: OpenCV (cv2) + PIL/Pillow
+- **データベース**: SQLite3
+- **データ分析**: pandas
+- **カメラ**: RTSP streaming via OpenCV
+- **フォント**: Hiragino/NotoSans (日本語対応)
 
 ### アルゴリズム
 
@@ -216,12 +292,33 @@ timestamp,object_type,speed_kmh,direction,confidence
 - **グラフ**: matplotlib
 - **自動化**: 週次/月次で自動生成
 
+## 実装状況サマリー（2025-11-15）
+
+### 完了した機能 ✅
+- [x] オブジェクト検知（YOLOv8n）
+- [x] 車両トラッキング（IoU-based）
+- [x] 速度推定エンジン
+- [x] Webダッシュボード（FastAPI）
+- [x] リアルタイムカメラストリーム
+- [x] データ収集・保存（SQLite + CSV）
+- [x] 統計グラフ表示（Chart.js）
+- [x] キャリブレーション機能
+- [x] 車両詳細分類（VehicleClassifier）
+- [x] 日本語フォント対応（PIL）
+
+### 未実装の機能 🚧
+- [ ] PDF レポート自動生成
+- [ ] 自転車逆走検知
+- [ ] 危険挙動検知（はみ出し、幅寄せ）
+- [ ] 自動週次/月次レポート
+- [ ] クラウド同期機能
+
 ## 今後の拡張案
 
 ### フェーズ2: 詳細分析
-- 車種分類（軽自動車・普通車・タクシー・バス）
-- 自転車の逆走検知
-- 危険挙動（はみ出し、幅寄せ）の検知
+- 車種分類（軽自動車・普通車・タクシー・バス）✅ 実装済み
+- 自転車の逆走検知 🚧 未実装
+- 危険挙動（はみ出し、幅寄せ）の検知 🚧 未実装
 
 ### フェーズ3: データ連携
 - クラウド同期（AWS S3 / Cloudflare R2）
@@ -233,6 +330,16 @@ timestamp,object_type,speed_kmh,direction,confidence
 - 汎用化（他地域でも使えるように）
 - GitHub公開・メンテナンス
 - 全国自治体への配布
+
+## 既知の問題
+
+### カメラストリーム安定性
+- **問題**: RTSPストリームが30秒タイムアウトでクラッシュすることがある
+- **原因**: カメラ側の一時的な接続問題、ネットワーク不安定
+- **対策**:
+  - タイムアウト値の調整
+  - 自動再接続機能の実装
+  - カメラ設定の見直し（ストリーム品質）
 
 ## ライセンス
 

@@ -453,14 +453,15 @@ def generate_video_stream(quality: int = 90, detection_interval: int = 3, enable
                         if enable_detection:
                             for track in tracks:
                                 # Draw track visualization
-                                x1, y1, x2, y2 = track.bbox
-                                color = (0, 255, 0)  # Green
-                                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
+                                if track.bbox_history:
+                                    x1, y1, x2, y2 = track.bbox_history[-1]
+                                    color = (0, 255, 0)  # Green
+                                    cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
 
-                                # Draw track ID
-                                label = f"ID:{track.track_id}"
-                                cv2.putText(annotated_frame, label, (x1, y1 - 10),
-                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                                    # Draw track ID
+                                    label = f"ID:{track.track_id}"
+                                    cv2.putText(annotated_frame, label, (x1, y1 - 10),
+                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
                     elif enable_detection:
                         # Just show detections without tracking

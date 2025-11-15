@@ -234,6 +234,8 @@ class StorageManager:
         Returns:
             DataFrame with detections
         """
+        from datetime import timedelta
+
         query = "SELECT * FROM detections WHERE 1=1"
         params = []
 
@@ -242,8 +244,9 @@ class StorageManager:
             params.append(start_date)
 
         if end_date:
-            query += " AND timestamp <= ?"
-            params.append(end_date)
+            # Include the entire end_date day by adding 1 day and using < instead of <=
+            query += " AND timestamp < ?"
+            params.append(end_date + timedelta(days=1))
 
         if object_type:
             query += " AND object_type = ?"
@@ -370,34 +373,41 @@ class StorageManager:
         Returns:
             Dictionary with summary statistics
         """
+        from datetime import timedelta
+
         cursor = self.conn.cursor()
 
+        # Query detections table directly instead of daily_stats
         cursor.execute("""
             SELECT
-                SUM(total_vehicles) as total,
-                AVG(avg_speed) as avg_speed,
-                MAX(max_speed) as max_speed,
-                SUM(speeding_count) as speeding_count,
-                AVG(speeding_rate) as avg_speeding_rate
-            FROM daily_stats
-            WHERE date >= ? AND date <= ?
+                COUNT(*) as total,
+                AVG(speed_kmh) as avg_speed,
+                MAX(speed_kmh) as max_speed
+            FROM detections
+            WHERE timestamp >= ? AND timestamp < ?
         """, (
-            start_date.strftime('%Y-%m-%d'),
-            end_date.strftime('%Y-%m-%d')
+            start_date,
+            end_date + timedelta(days=1)  # Include full end_date
         ))
 
         row = cursor.fetchone()
 
-        if row:
+        if row and row[0]:
             return {
                 'total_vehicles': row[0] or 0,
                 'avg_speed': row[1] or 0,
                 'max_speed': row[2] or 0,
-                'speeding_count': row[3] or 0,
-                'avg_speeding_rate': row[4] or 0
+                'speeding_count': 0,  # TODO: Calculate based on speed_limit
+                'avg_speeding_rate': 0
             }
 
-        return {}
+        return {
+            'total_vehicles': 0,
+            'avg_speed': 0,
+            'max_speed': 0,
+            'speeding_count': 0,
+            'avg_speeding_rate': 0
+        }
 
     def cleanup_old_data(self):
         """Remove data older than retention period"""
