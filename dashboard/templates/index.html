@@ -200,7 +200,7 @@
             </div>
 
             <div style="position: relative; width: 100%; max-width: 960px; margin: 0 auto;">
-                <img id="camera-feed" src="/api/video_feed?quality=90&detection_interval=3" style="width: 100%; height: auto; border-radius: 4px;" alt="Camera Feed">
+                <img id="camera-feed" src="/api/video_feed?quality=90&detection_interval=2&enable_detection=true&enable_data_collection=true" style="width: 100%; height: auto; border-radius: 4px;" alt="Camera Feed">
                 <div id="camera-status" style="position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); color: white; padding: 5px 10px; border-radius: 4px; font-size: 12px;">
                     カメラ接続中...
                 </div>
@@ -276,7 +276,7 @@
             const enableDetection = document.getElementById('enable-detection').value;
 
             const feedImg = document.getElementById('camera-feed');
-            const newSrc = `/api/video_feed?quality=${quality}&detection_interval=${interval}&enable_detection=${enableDetection}`;
+            const newSrc = `/api/video_feed?quality=${quality}&detection_interval=${interval}&enable_detection=${enableDetection}&enable_data_collection=true`;
 
             // Add timestamp to force reload
             feedImg.src = newSrc + '&t=' + new Date().getTime();
