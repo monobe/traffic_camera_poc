@@ -25,6 +25,8 @@ sys.path.append(str(Path(__file__).parent.parent))
 from storage.database import StorageManager
 from capture.stream import CameraStream
 from detection.detector import YOLODetector
+from tracking.tracker import ObjectTracker
+from speed_estimation.estimator import SpeedEstimator
 
 
 logger = logging.getLogger(__name__)
@@ -45,7 +47,11 @@ templates = Jinja2Templates(directory=str(templates_dir))
 storage = None
 camera_stream = None
 detector = None
+tracker = None
+speed_estimator = None
 camera_config = None
+config = None
+data_collection_active = False  # Flag to prevent duplicate data collection
 
 
 def init_storage(db_path: str = "./data/traffic.db", csv_dir: str = "./data/csv"):
@@ -56,8 +62,8 @@ def init_storage(db_path: str = "./data/traffic.db", csv_dir: str = "./data/csv"
 
 
 def init_camera():
-    """Initialize camera stream"""
-    global camera_stream, detector, camera_config
+    """Initialize camera stream and tracking/speed estimation"""
+    global camera_stream, detector, tracker, speed_estimator, camera_config, config
 
     try:
         # Load config
@@ -83,7 +89,7 @@ def init_camera():
             resolution=tuple(camera_config.get('resolution')) if camera_config.get('resolution') else None
         )
 
-        # Initialize detector for visualization
+        # Initialize detector
         detection_config = config.get('detection', {})
         detector = YOLODetector(
             model_path=detection_config.get('model', 'yolov8n.pt'),
@@ -91,7 +97,23 @@ def init_camera():
             device=detection_config.get('device', 'cpu')
         )
 
-        logger.info("Camera streaming initialized")
+        # Initialize tracker
+        tracking_config = config.get('tracking', {})
+        tracker = ObjectTracker(
+            max_age=tracking_config.get('max_age', 30),
+            min_hits=tracking_config.get('min_hits', 3),
+            iou_threshold=tracking_config.get('iou_threshold', 0.3)
+        )
+
+        # Initialize speed estimator
+        speed_config = config.get('speed_estimation', {})
+        speed_estimator = SpeedEstimator(
+            calibration_file=speed_config.get('calibration_file', 'calibration.json'),
+            fps=camera_config.get('fps', 20),
+            min_track_length=speed_config.get('min_track_length', 7)
+        )
+
+        logger.info("Camera streaming and tracking initialized")
     except Exception as e:
         logger.error(f"Failed to initialize camera: {e}")
 
@@ -324,16 +346,17 @@ async def get_vehicle_types(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def generate_video_stream(quality: int = 90, detection_interval: int = 3, enable_detection: bool = True):
+def generate_video_stream(quality: int = 90, detection_interval: int = 3, enable_detection: bool = True, enable_data_collection: bool = True):
     """
-    Generate video stream with optional detections
+    Generate video stream with optional detections and data collection
 
     Args:
         quality: JPEG quality (0-100), higher = better quality
         detection_interval: Run detection every N frames (1 = every frame, 3 = every 3rd frame)
         enable_detection: Enable object detection overlay
+        enable_data_collection: Enable tracking and speed measurement with data storage
     """
-    global camera_stream, detector
+    global camera_stream, detector, tracker, speed_estimator, storage, config, data_collection_active
     import time
 
     if camera_stream is None:
@@ -357,9 +380,19 @@ def generate_video_stream(quality: int = 90, detection_interval: int = 3, enable
     if enable_detection and detector and not detector.is_loaded:
         detector.load_model()
 
+    # Check if we should do data collection (only one stream should do this)
+    should_collect_data = enable_data_collection and not data_collection_active
+    if should_collect_data:
+        data_collection_active = True
+        logger.info("Data collection ENABLED for this stream")
+
+    # Get speed limit from config
+    speed_limit = config.get('speed_estimation', {}).get('speed_limit_kmh', 30) if config else 30
+
     frame_count = 0
     last_detections = []
     last_frame_time = time.time()
+    estimated_tracks = set()  # Track IDs that have been estimated
 
     # Target frame rate for streaming (independent of detection)
     target_stream_fps = 10  # Stream at 10 FPS for smooth display
@@ -382,15 +415,58 @@ def generate_video_stream(quality: int = 90, detection_interval: int = 3, enable
                     continue
 
                 frame_count += 1
+                annotated_frame = frame.copy()
 
-                # Run detection only every N frames to reduce CPU load
-                if enable_detection and detector and detector.is_loaded and (frame_count % detection_interval == 0):
-                    annotated_frame, last_detections = detector.detect_and_visualize(frame)
-                else:
-                    # Use raw frame
-                    annotated_frame = frame
+                # Run detection every N frames
+                if detector and detector.is_loaded and (frame_count % detection_interval == 0):
+                    detections = detector.detect(frame)
 
-                # Encode frame as JPEG with high quality
+                    # Update tracker if data collection is enabled
+                    if should_collect_data and tracker:
+                        tracks = tracker.update(detections)
+
+                        # Process completed tracks for speed estimation
+                        if speed_estimator and storage:
+                            for track in tracks:
+                                # Only estimate speed once per track when it has enough frames
+                                if (track.track_id not in estimated_tracks and
+                                    track.total_frames >= speed_estimator.min_track_length):
+
+                                    speed_estimate = speed_estimator.estimate_speed(track)
+
+                                    if speed_estimate and speed_estimator.is_speed_valid(speed_estimate.speed_kmh):
+                                        # Save to database and CSV
+                                        try:
+                                            storage.save_detection(speed_estimate)
+                                            storage.save_csv(speed_estimate, speed_limit)
+                                            estimated_tracks.add(track.track_id)
+
+                                            logger.info(
+                                                f"Track {track.track_id}: {speed_estimate.object_type} "
+                                                f"{speed_estimate.speed_kmh:.1f} km/h "
+                                                f"({speed_estimate.direction})"
+                                            )
+                                        except Exception as e:
+                                            logger.error(f"Error saving detection: {e}")
+
+                        # Visualize tracks on frame if detection enabled
+                        if enable_detection:
+                            for track in tracks:
+                                # Draw track visualization
+                                x1, y1, x2, y2 = track.bbox
+                                color = (0, 255, 0)  # Green
+                                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
+
+                                # Draw track ID
+                                label = f"ID:{track.track_id}"
+                                cv2.putText(annotated_frame, label, (x1, y1 - 10),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+                    elif enable_detection:
+                        # Just show detections without tracking
+                        annotated_frame, _ = detector.detect_and_visualize(frame)
+
+                # Encode frame as JPEG
                 _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
 
                 # Yield frame in multipart format
@@ -411,34 +487,42 @@ def generate_video_stream(quality: int = 90, detection_interval: int = 3, enable
 
     except Exception as e:
         logger.error(f"Error in video stream: {e}")
+    finally:
+        # Release data collection flag when stream ends
+        if should_collect_data:
+            data_collection_active = False
+            logger.info("Data collection DISABLED")
 
 
 @app.get("/api/video_feed")
 async def video_feed(
     quality: int = 90,
     detection_interval: int = 3,
-    enable_detection: bool = True
+    enable_detection: bool = True,
+    enable_data_collection: bool = True
 ):
     """
-    Video feed endpoint with configurable quality and performance
+    Video feed endpoint with configurable quality, performance, and data collection
 
     Args:
         quality: JPEG quality (1-100), default 90. Higher = better quality but larger bandwidth
         detection_interval: Run detection every N frames, default 3. Higher = better performance
         enable_detection: Enable object detection overlay, default True
+        enable_data_collection: Enable tracking and speed measurement, default True
 
     Examples:
         /api/video_feed?quality=95&detection_interval=1  # Best quality, all frames detected
         /api/video_feed?quality=90&detection_interval=3  # Balanced (default)
         /api/video_feed?quality=85&detection_interval=5  # Better performance
         /api/video_feed?enable_detection=false           # Raw camera feed, no detection
+        /api/video_feed?enable_data_collection=true      # Enable speed measurement and data storage
     """
     # Validate parameters
     quality = max(1, min(100, quality))
     detection_interval = max(1, min(10, detection_interval))
 
     return StreamingResponse(
-        generate_video_stream(quality, detection_interval, enable_detection),
+        generate_video_stream(quality, detection_interval, enable_detection, enable_data_collection),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 
