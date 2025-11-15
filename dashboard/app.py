@@ -25,6 +25,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from storage.database import StorageManager
 from capture.stream import CameraStream
 from detection.detector import YOLODetector
+from detection.motion_detector import MotionDetector
 from tracking.tracker import ObjectTracker
 from speed_estimation.estimator import SpeedEstimator
 
@@ -89,13 +90,32 @@ def init_camera():
             resolution=tuple(camera_config.get('resolution')) if camera_config.get('resolution') else None
         )
 
-        # Initialize detector
+        # Initialize detector based on detection method
         detection_config = config.get('detection', {})
-        detector = YOLODetector(
-            model_path=detection_config.get('model', 'yolov8n.pt'),
-            confidence=detection_config.get('confidence', 0.5),
-            device=detection_config.get('device', 'cpu')
-        )
+        detection_method = detection_config.get('method', 'yolo').lower()
+
+        if detection_method == 'motion':
+            # Use lightweight motion-based detector
+            detector = MotionDetector(
+                min_area=detection_config.get('min_area', 2000),
+                max_area=detection_config.get('max_area', 100000),
+                confidence=detection_config.get('confidence', 0.8),
+                learning_rate=detection_config.get('learning_rate', 0.001),
+                ignore_zones=detection_config.get('ignore_zones', [])
+            )
+            logger.info("Using motion-based detection (lightweight)")
+        else:
+            # Use YOLO detector (default)
+            detector = YOLODetector(
+                model_path=detection_config.get('model', 'yolov8n.pt'),
+                confidence=detection_config.get('confidence', 0.5),
+                device=detection_config.get('device', 'cpu'),
+                classes=detection_config.get('classes'),
+                imgsz=detection_config.get('imgsz', 640),
+                enable_classification=detection_config.get('enable_classification', True),
+                ignore_zones=detection_config.get('ignore_zones', [])
+            )
+            logger.info("Using YOLO detection")
 
         # Initialize tracker
         tracking_config = config.get('tracking', {})
@@ -346,13 +366,12 @@ async def get_vehicle_types(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def generate_video_stream(quality: int = 90, detection_interval: int = 3, enable_detection: bool = True, enable_data_collection: bool = True):
+def generate_video_stream(quality: int = 90, enable_detection: bool = True, enable_data_collection: bool = True):
     """
     Generate video stream with optional detections and data collection
 
     Args:
         quality: JPEG quality (0-100), higher = better quality
-        detection_interval: Run detection every N frames (1 = every frame, 3 = every 3rd frame)
         enable_detection: Enable object detection overlay
         enable_data_collection: Enable tracking and speed measurement with data storage
     """
@@ -398,28 +417,63 @@ def generate_video_stream(quality: int = 90, detection_interval: int = 3, enable
     target_stream_fps = 10  # Stream at 10 FPS for smooth display
     frame_interval = 1.0 / target_stream_fps
 
+    # FPS measurement for debugging speed estimation
+    fps_start_time = time.time()
+    fps_frame_count = 0
+    actual_fps = 0.0
+
     try:
         while True:
-            # Get the LATEST frame from camera (skip buffered frames)
+            # Get frame from camera
             if camera_stream.cap and camera_stream.cap.isOpened():
-                # Grab and discard old frames to get the latest
-                for _ in range(5):  # Skip up to 5 frames to clear buffer
-                    camera_stream.cap.grab()
-
-                # Retrieve the latest frame
-                ret, frame = camera_stream.cap.retrieve()
+                # Read frame directly (no buffer clearing needed for continuous processing)
+                ret, frame = camera_stream.cap.read()
 
                 if not ret or frame is None:
                     logger.warning("Failed to get frame from camera")
                     time.sleep(0.1)
                     continue
 
+                # Resize frame to reduce processing load (640x360 from 1280x720)
+                # This speeds up detection significantly while maintaining accuracy
+                detection_frame = cv2.resize(frame, (640, 360))
+
                 frame_count += 1
+                fps_frame_count += 1
                 annotated_frame = frame.copy()
 
-                # Run detection every N frames
-                if detector and detector.is_loaded and (frame_count % detection_interval == 0):
-                    detections = detector.detect(frame)
+                # Measure actual FPS every 100 frames
+                if fps_frame_count >= 100:
+                    fps_elapsed = time.time() - fps_start_time
+                    actual_fps = fps_frame_count / fps_elapsed if fps_elapsed > 0 else 0
+                    configured_fps = config.get('camera', {}).get('fps', 20) if config else 20
+
+                    logger.info(
+                        f"FPS Check: Actual={actual_fps:.2f} FPS, "
+                        f"Configured={configured_fps} FPS, "
+                        f"Difference={(actual_fps - configured_fps):.2f} FPS "
+                        f"({((actual_fps - configured_fps) / configured_fps * 100):.1f}%)"
+                    )
+
+                    # Update speed estimator with actual FPS
+                    if speed_estimator:
+                        speed_estimator.update_fps(actual_fps)
+
+                    # Reset counters
+                    fps_start_time = time.time()
+                    fps_frame_count = 0
+
+                # Run detection on every frame using resized image for speed
+                # Resolution reduction (640x360) provides 4x speedup while maintaining accuracy
+                detections = []
+                if detector and detector.is_loaded:
+                    # Use resized frame for faster detection
+                    detections = detector.detect(detection_frame)
+                    # Scale bounding boxes back to original frame size
+                    for det in detections:
+                        x1, y1, x2, y2 = det.bbox
+                        det.bbox = (x1 * 2, y1 * 2, x2 * 2, y2 * 2)
+                    last_detections = detections  # Save for future use
 
                     # Update tracker if data collection is enabled
                     if should_collect_data and tracker:
@@ -452,20 +506,86 @@ def generate_video_stream(quality: int = 90, detection_interval: int = 3, enable
                         # Visualize tracks on frame if detection enabled
                         if enable_detection:
                             for track in tracks:
+                                # Only show tracks that were recently updated (avoid showing stale/lost tracks)
+                                if track.frames_since_update > 2:
+                                    continue
+
                                 # Draw track visualization
                                 if track.bbox_history:
                                     x1, y1, x2, y2 = track.bbox_history[-1]
-                                    color = (0, 255, 0)  # Green
+
+                                    # Color based on object type
+                                    colors = {
+                                        'car': (0, 255, 0),        # Green
+                                        'motorcycle': (255, 0, 0),  # Blue
+                                        'bus': (0, 165, 255),      # Orange
+                                        'truck': (0, 255, 255),    # Yellow
+                                        'bicycle': (255, 255, 0),  # Cyan
+                                        'person': (255, 0, 255)    # Magenta
+                                    }
+                                    color = colors.get(track.class_name, (0, 255, 0))
+
                                     cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
 
-                                    # Draw track ID
-                                    label = f"ID:{track.track_id}"
-                                    cv2.putText(annotated_frame, label, (x1, y1 - 10),
-                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                                    # Draw track ID and class name
+                                    label = f"ID:{track.track_id} {track.class_name}"
 
-                    elif enable_detection:
-                        # Just show detections without tracking
-                        annotated_frame, _ = detector.detect_and_visualize(frame)
+                                    # Use PIL for Japanese text support if detector has the method
+                                    if detector and hasattr(detector, '_draw_text_pil'):
+                                        annotated_frame = detector._draw_text_pil(
+                                            annotated_frame,
+                                            label,
+                                            (x1 + 3, y1 - 25),
+                                            font_size=18,
+                                            text_color=(0, 0, 0),
+                                            bg_color=color
+                                        )
+                                    else:
+                                        cv2.putText(annotated_frame, label, (x1, y1 - 10),
+                                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+                                    # Draw speed estimate if available
+                                    if speed_estimator and track.total_frames >= speed_estimator.min_track_length:
+                                        speed_estimate = speed_estimator.estimate_speed(track)
+                                        if speed_estimate and speed_estimator.is_speed_valid(speed_estimate.speed_kmh):
+                                            speed_text = f"{speed_estimate.speed_kmh:.1f} km/h"
+                                            cv2.putText(annotated_frame, speed_text, (x1, y2 + 20),
+                                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+                    elif enable_detection and detections:
+                        # Show detections without tracking (data collection disabled)
+                        for det in detections:
+                            x1, y1, x2, y2 = det.bbox
+
+                            # Color based on object type
+                            colors = {
+                                'car': (0, 255, 0),        # Green
+                                'motorcycle': (255, 0, 0),  # Blue
+                                'bus': (0, 165, 255),      # Orange
+                                'truck': (0, 255, 255),    # Yellow
+                                'bicycle': (255, 255, 0),  # Cyan
+                                'person': (255, 0, 255)    # Magenta
+                            }
+                            color = colors.get(det.class_name, (0, 255, 0))
+
+                            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
+
+                            # Draw class name
+                            label = f"{det.class_name} {det.confidence:.2f}"
+
+                            # Use PIL for Japanese text support if detector has the method
+                            if detector and hasattr(detector, '_draw_text_pil'):
+                                annotated_frame = detector._draw_text_pil(
+                                    annotated_frame,
+                                    label,
+                                    (x1 + 3, y1 - 25),
+                                    font_size=18,
+                                    text_color=(0, 0, 0),
+                                    bg_color=color
+                                )
+                            else:
+                                cv2.putText(annotated_frame, label, (x1, y1 - 10),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
                 # Encode frame as JPEG
                 _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
@@ -498,32 +618,28 @@ def generate_video_stream(quality: int = 90, detection_interval: int = 3, enable
 @app.get("/api/video_feed")
 async def video_feed(
     quality: int = 90,
-    detection_interval: int = 3,
     enable_detection: bool = True,
     enable_data_collection: bool = True
 ):
     """
-    Video feed endpoint with configurable quality, performance, and data collection
+    Video feed endpoint with configurable quality and detection options
 
     Args:
         quality: JPEG quality (1-100), default 90. Higher = better quality but larger bandwidth
-        detection_interval: Run detection every N frames, default 3. Higher = better performance
         enable_detection: Enable object detection overlay, default True
         enable_data_collection: Enable tracking and speed measurement, default True
 
     Examples:
-        /api/video_feed?quality=95&detection_interval=1  # Best quality, all frames detected
-        /api/video_feed?quality=90&detection_interval=3  # Balanced (default)
-        /api/video_feed?quality=85&detection_interval=5  # Better performance
-        /api/video_feed?enable_detection=false           # Raw camera feed, no detection
-        /api/video_feed?enable_data_collection=true      # Enable speed measurement and data storage
+        /api/video_feed?quality=95                       # High quality
+        /api/video_feed?quality=70                       # Lower quality, better performance
+        /api/video_feed?enable_detection=false           # Raw camera feed, no detection boxes
+        /api/video_feed?enable_data_collection=false     # Detection only, no tracking/speed measurement
     """
-    # Validate parameters
+    # Validate quality parameter
     quality = max(1, min(100, quality))
-    detection_interval = max(1, min(10, detection_interval))
 
     return StreamingResponse(
-        generate_video_stream(quality, detection_interval, enable_detection, enable_data_collection),
+        generate_video_stream(quality, enable_detection, enable_data_collection),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 

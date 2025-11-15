@@ -66,7 +66,8 @@ class YOLODetector:
         device: str = "cpu",
         classes: Optional[List[int]] = None,
         imgsz: int = 640,
-        enable_classification: bool = True
+        enable_classification: bool = True,
+        ignore_zones: Optional[List[List[int]]] = None
     ):
         """
         Initialize YOLO detector
@@ -78,12 +79,14 @@ class YOLODetector:
             classes: List of class IDs to detect (None = all vehicle classes)
             imgsz: Input image size
             enable_classification: Enable detailed vehicle classification
+            ignore_zones: List of [x1, y1, x2, y2] zones to ignore detections
         """
         self.model_path = model_path
         self.confidence = confidence
         self.device = device
         self.imgsz = imgsz
         self.enable_classification = enable_classification
+        self.ignore_zones = ignore_zones or []
 
         # Set classes to detect
         if classes is None:
@@ -106,6 +109,8 @@ class YOLODetector:
         logger.info(f"  Device: {device}")
         logger.info(f"  Classes: {self.classes}")
         logger.info(f"  Classification: {'enabled' if enable_classification else 'disabled'}")
+        if self.ignore_zones:
+            logger.info(f"  Ignore zones: {self.ignore_zones}")
 
     def load_model(self) -> bool:
         """
@@ -205,11 +210,44 @@ class YOLODetector:
 
                     detections.append(detection)
 
+            # Filter out detections in ignore zones
+            if self.ignore_zones:
+                detections = self._filter_ignore_zones(detections)
+
             return detections
 
         except Exception as e:
             logger.error(f"Error during detection: {e}")
             return []
+
+    def _filter_ignore_zones(self, detections: List[Detection]) -> List[Detection]:
+        """
+        Filter out detections that are in ignore zones
+
+        Args:
+            detections: List of detections
+
+        Returns:
+            Filtered list of detections
+        """
+        filtered = []
+        for detection in detections:
+            x1, y1, x2, y2 = detection.bbox
+            cx, cy = detection.center()
+
+            # Check if detection center is in any ignore zone
+            in_ignore_zone = False
+            for zone in self.ignore_zones:
+                zx1, zy1, zx2, zy2 = zone
+                if zx1 <= cx <= zx2 and zy1 <= cy <= zy2:
+                    in_ignore_zone = True
+                    logger.debug(f"Ignored {detection.class_name} at ({cx}, {cy}) in zone {zone}")
+                    break
+
+            if not in_ignore_zone:
+                filtered.append(detection)
+
+        return filtered
 
     def _draw_text_pil(
         self,

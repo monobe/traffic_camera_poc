@@ -112,6 +112,19 @@ class SpeedEstimator:
         logger.info(f"  Min track length: {min_track_length}")
         logger.info(f"  Speed limit: {speed_limit_kmh} km/h")
 
+    def update_fps(self, fps: float):
+        """
+        Update FPS value dynamically based on actual measured frame rate
+
+        Args:
+            fps: Measured actual FPS
+        """
+        if fps > 0:
+            old_fps = self.fps
+            self.fps = fps
+            if abs(fps - old_fps) > 1.0:
+                logger.info(f"FPS updated: {old_fps:.2f} -> {fps:.2f} FPS")
+
     def estimate_speed(self, track) -> Optional[SpeedEstimate]:
         """
         Estimate speed from track trajectory
@@ -138,6 +151,12 @@ class SpeedEstimator:
 
         # Convert to meters
         distance_meters = pixel_distance / self.calibration.pixels_per_meter
+
+        # Minimum distance filter: only calculate speed if vehicle moved at least 0.5m
+        # This prevents calculating speed for stationary or barely-moving objects
+        MIN_DISTANCE_METERS = 0.5
+        if distance_meters < MIN_DISTANCE_METERS:
+            return None
 
         # Calculate time (number of frames / FPS)
         time_seconds = len(track.trajectory) / self.fps
