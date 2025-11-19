@@ -15,7 +15,7 @@ from pathlib import Path
 
 import yaml
 
-from capture.stream import CameraStream
+from capture.stream import CameraStream, ThreadedCameraStream
 from detection.detector import YOLODetector
 from tracking.tracker import ObjectTracker
 from speed_estimation.estimator import SpeedEstimator
@@ -97,7 +97,12 @@ class TrafficMonitor:
 
         # 1. Camera
         camera_config = self.config.get('camera', {})
-        self.camera = CameraStream(
+        use_threading = self.config.get('performance', {}).get('threaded_capture', True)
+        
+        stream_class = ThreadedCameraStream if use_threading else CameraStream
+        self.logger.info(f"Using {'threaded' if use_threading else 'standard'} camera stream")
+        
+        self.camera = stream_class(
             rtsp_url=camera_config.get('rtsp_url'),
             fps=camera_config.get('fps', 15),
             resolution=tuple(camera_config.get('resolution')) if camera_config.get('resolution') else None,
@@ -112,7 +117,8 @@ class TrafficMonitor:
             confidence=detection_config.get('confidence', 0.5),
             device=detection_config.get('device', 'cpu'),
             classes=detection_config.get('classes'),
-            imgsz=detection_config.get('imgsz', 640)
+            imgsz=detection_config.get('imgsz', 640),
+            enable_classification=detection_config.get('enable_classification', True)
         )
 
         # 3. Tracker
@@ -169,8 +175,14 @@ class TrafficMonitor:
         estimated_tracks = set()
 
         try:
+            frame_skip = self.config.get('performance', {}).get('frame_skip', 1)
+            
             for frame in self.camera.frame_generator(auto_reconnect=True):
                 self.frame_count += 1
+                
+                # Frame skipping
+                if self.frame_count % frame_skip != 0:
+                    continue
 
                 # Run detection
                 detections = self.detector.detect(frame)

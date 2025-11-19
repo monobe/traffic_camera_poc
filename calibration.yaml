@@ -1,0 +1,13 @@
+# Calibration dataset for INT8 quantization
+path: /Users/eiji.monobe/traffic_camera/calibration_data
+train: .
+val: .
+
+# Classes (COCO dataset subset for traffic monitoring)
+names:
+  0: person
+  1: bicycle
+  2: car
+  3: motorcycle
+  5: bus
+  7: truck

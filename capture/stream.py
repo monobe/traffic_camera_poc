@@ -7,6 +7,9 @@ Handles RTSP stream capture from IP cameras (TP-Link Tapo C320WS)
 import logging
 import time
 from typing import Iterator, Optional, Tuple
+import threading
+import queue
+
 
 import cv2
 import numpy as np
@@ -232,3 +235,88 @@ class CameraStream:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit"""
         self.release()
+
+
+class ThreadedCameraStream(CameraStream):
+    """
+    Threaded camera stream for non-blocking capture
+    
+    Continuously reads frames in a background thread so that the main thread
+    always gets the most recent frame immediately.
+    """
+    
+    def __init__(
+        self,
+        rtsp_url: str,
+        fps: int = 15,
+        resolution: Optional[Tuple[int, int]] = None,
+        reconnect_timeout: int = 30,
+        buffer_size: int = 1
+    ):
+        super().__init__(rtsp_url, fps, resolution, reconnect_timeout, buffer_size)
+        self.frame_queue = queue.Queue(maxsize=1)
+        self.stopped = False
+        self.thread = None
+        self.lock = threading.Lock()
+        
+    def connect(self) -> bool:
+        """Connect to camera and start background thread"""
+        if super().connect():
+            self.stopped = False
+            self.thread = threading.Thread(target=self._update, daemon=True)
+            self.thread.start()
+            return True
+        return False
+        
+    def _update(self):
+        """Background thread loop"""
+        while not self.stopped:
+            if not self.is_connected:
+                # Try to reconnect
+                if self.reconnect():
+                    continue
+                time.sleep(1.0)
+                continue
+                
+            try:
+                ret, frame = self.cap.read()
+                
+                if not ret or frame is None:
+                    with self.lock:
+                        self.is_connected = False
+                    continue
+                    
+                # Resize if needed
+                if self.resolution is not None:
+                    frame = cv2.resize(frame, self.resolution)
+                    
+                # Update latest frame (overwrite if full)
+                if self.frame_queue.full():
+                    try:
+                        self.frame_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                        
+                self.frame_queue.put(frame)
+                
+                with self.lock:
+                    self.frame_count += 1
+                    
+            except Exception as e:
+                logger.error(f"Error in capture thread: {e}")
+                with self.lock:
+                    self.is_connected = False
+                    
+    def get_frame(self) -> Optional[np.ndarray]:
+        """Get latest frame from queue"""
+        try:
+            return self.frame_queue.get_nowait()
+        except queue.Empty:
+            return None
+            
+    def release(self):
+        """Stop thread and release resources"""
+        self.stopped = True
+        if self.thread is not None:
+            self.thread.join(timeout=1.0)
+        super().release()
