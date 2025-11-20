@@ -13,11 +13,11 @@ camera:
 
 # Detection settings
 detection:
-  model: "yolov8n.pt"  # yolov8n (fast), yolov8s (balanced), yolov8m (accurate)
+  model: "yolov8n.mlpackage"  # Optimized: CoreML model
   confidence: 0.5
   classes: [2, 3, 5, 7]  # COCO classes: 2=car, 3=motorcycle, 5=bus, 7=truck
-  device: "cpu"  # "cpu" or "cuda"
-  imgsz: 416  # input image size (Optimized: down from 640)
+  device: "cpu"  # "cpu" or "cuda" (CoreML handles this internally)
+  imgsz: 640  # input image size (CoreML requires 640)
   enable_classification: false # Optimized: disabled detailed classification
 
 # Tracking settings

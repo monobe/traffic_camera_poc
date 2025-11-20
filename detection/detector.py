@@ -115,7 +115,7 @@ class YOLODetector:
     def load_model(self) -> bool:
         """
         Load YOLO model
-
+        
         Returns:
             True if model loaded successfully, False otherwise
         """
@@ -126,13 +126,44 @@ class YOLODetector:
 
             # Check if model file exists
             if not Path(self.model_path).exists():
-                logger.info(f"Model file not found, downloading {self.model_path}...")
+                # If .pt file, try to download
+                if self.model_path.endswith('.pt'):
+                    logger.info(f"Model file not found, downloading {self.model_path}...")
+                # If .mlpackage, we can't download, but maybe we can fallback
+                elif self.model_path.endswith('.mlpackage'):
+                    logger.warning(f"CoreML model {self.model_path} not found.")
 
-            self.model = YOLO(self.model_path)
-            self.is_loaded = True
+            try:
+                self.model = YOLO(self.model_path)
+                # Force a check to see if it actually works (CoreML might fail at inference time, but init usually checks)
+                # However, Ultralytics YOLO lazy loads.
+                self.is_loaded = True
+                logger.info("✓ YOLO model loaded successfully")
+                return True
 
-            logger.info("✓ YOLO model loaded successfully")
-            return True
+            except Exception as e:
+                # Fallback logic for CoreML
+                if self.model_path.endswith('.mlpackage'):
+                    logger.warning(f"Failed to load CoreML model: {e}")
+                    
+                    # Try fallback to .pt
+                    fallback_path = self.model_path.replace('.mlpackage', '.pt')
+                    logger.info(f"Attempting fallback to {fallback_path}...")
+                    
+                    if Path(fallback_path).exists() or fallback_path.endswith('yolov8n.pt'): # yolov8n.pt can be auto-downloaded
+                        try:
+                            self.model = YOLO(fallback_path)
+                            self.is_loaded = True
+                            logger.info(f"✓ Fallback model {fallback_path} loaded successfully")
+                            return True
+                        except Exception as e2:
+                            logger.error(f"Failed to load fallback model: {e2}")
+                            return False
+                    else:
+                        logger.error(f"Fallback model {fallback_path} not found")
+                        return False
+                else:
+                    raise e
 
         except ImportError as e:
             logger.error(f"Failed to import ultralytics: {e}")
